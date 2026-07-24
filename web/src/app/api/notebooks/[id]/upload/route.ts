@@ -73,7 +73,7 @@ export async function POST(
         text,
       });
       // Background index (no progress channel on JSON path)
-      scheduleNotebookIndex(id);
+      scheduleNotebookIndex(id, [source.id]);
       return Response.json(
         {
           ...source,
@@ -147,6 +147,7 @@ export async function POST(
 
       // Blocking index with live progress (vectors → Supabase Postgres)
       const indexResult = await indexNotebookEmbeddings(id, {
+        sourceIds: [source.id],
         onProgress: (ev) => {
           if (ev.type === "index_started") {
             emit({

@@ -9,10 +9,12 @@ import type {
   Timing,
 } from "./types";
 import { absoluteRankStrength } from "./document-rank";
+import { corpusTimingMs } from "./timing";
 
 export type StageVizId =
   | "corpus"
   | "query"
+  | "rank"
   | "bm25"
   | "embedding"
   | "fusion"
@@ -99,6 +101,11 @@ const STAGE_COPY: Record<
     label: "Query prep",
     explanation:
       "Normalize/trim the user query before retrieval. Multi-turn expansion would appear here on web search; dataset search uses the query as typed.",
+  },
+  rank: {
+    label: "Retrieval / rank",
+    explanation:
+      "Wall-clock retrieval and document ranking time, excluding context packing. BM25, embedding and fusion timings are diagnostic sub-stages and may overlap.",
   },
   bm25: {
     label: "Lexical BM25",
@@ -260,8 +267,8 @@ export function buildStageTimeline(
 }
 
 /**
- * Sequential waterfall bars (non-overlapping stages that sum wall time).
- * Uses rankMs if present else sum of parts; pack and generate separate.
+ * Sequential top-level waterfall bars. Component timings are intentionally
+ * not rendered as adjacent bars because BM25 and embedding may overlap.
  */
 export function buildTimingWaterfall(
   timing: Timing | null | undefined,
@@ -284,28 +291,11 @@ export function buildTimingWaterfall(
       include: (timing.queryProcessMs ?? 0) > 0 || true,
     },
     {
-      id: "bm25",
-      label: "BM25",
-      ms: timing.bm25Ms ?? 0,
+      id: "rank",
+      label: "Rank",
+      ms: timing.rankMs ?? timing.retrieveMs ?? 0,
       color: "primary",
       include: true,
-    },
-    {
-      id: "embedding",
-      label: "Embed",
-      ms: timing.embeddingMs ?? 0,
-      color: "accent",
-      include: Boolean(metrics?.denseUsed) || (timing.embeddingMs ?? 0) > 0,
-    },
-    {
-      id: "fusion",
-      label: "Fusion",
-      ms: timing.fusionMs ?? 0,
-      color: "primary",
-      include:
-        (metrics?.retrievalMode === "adaptive_rrf" ||
-          metrics?.retrievalMode === "legacy_rrf_ce") ||
-          (timing.fusionMs ?? 0) > 0,
     },
     {
       id: "pack",
@@ -323,10 +313,7 @@ export function buildTimingWaterfall(
     },
   ];
 
-  const corpusMs =
-    (timing.notebookLookupMs ?? 0) +
-    (timing.corpusLoadMs ?? 0) +
-    (timing.corpusMergeMs ?? 0);
+  const corpusMs = corpusTimingMs(timing);
   if (
     timing.notebookLookupMs != null ||
     timing.corpusLoadMs != null ||
@@ -341,9 +328,19 @@ export function buildTimingWaterfall(
     });
   }
 
-  const active = stages.filter((s) => s.include && (s.ms > 0 || s.id === "bm25" || s.id === "pack" || s.id === "query"));
-  const sumParts = active.reduce((a, s) => a + Math.max(0, s.ms), 0);
-  const total = Math.max(timing.totalMs ?? 0, sumParts, 1);
+  const active = stages.filter((s) => s.include && (s.ms > 0 || s.id === "rank" || s.id === "pack" || s.id === "query"));
+  const namedMs = active.reduce((a, s) => a + Math.max(0, s.ms), 0);
+  const total = Math.max(timing.totalMs ?? 0, namedMs, 1);
+  const overheadMs = Math.max(0, total - namedMs);
+  if (overheadMs > 0) {
+    active.push({
+      id: "total",
+      label: "Other",
+      ms: overheadMs,
+      color: "muted",
+      include: true,
+    });
+  }
 
   let offset = 0;
   return active.map((s) => {

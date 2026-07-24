@@ -170,7 +170,7 @@ export async function getSearchRun(id: string) {
   if (sb) {
     const { data, error } = await sb
       .from("search_runs")
-      .select("*")
+      .select("id,query,status,results_json,answer,timing_json,metrics_json,created_at,completed_at")
       .eq("id", id)
       .maybeSingle();
     if (error || !data) return null;

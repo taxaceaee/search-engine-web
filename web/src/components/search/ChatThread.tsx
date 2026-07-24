@@ -1,4 +1,4 @@
-import { useEffect, useRef, type ReactNode } from "react";
+import { memo, useEffect, useMemo, useRef, type ReactNode } from "react";
 import { Bot, User, Loader2 } from "lucide-react";
 import { Markdown } from "@/components/Markdown";
 import { cn } from "@/lib/utils";
@@ -24,7 +24,7 @@ function pct(n?: number | null) {
   return `${Math.round(n * 100)}%`;
 }
 
-export function ChatThread({
+export const ChatThread = memo(function ChatThread({
   messages,
   activeAssistantId,
   onSelectAssistant,
@@ -40,11 +40,35 @@ export function ChatThread({
   onUpdateMessage?: (msgId: string, update: Partial<ChatMessage>) => void;
 }) {
   const endRef = useRef<HTMLDivElement>(null);
-  const lastMessageContent = messages[messages.length - 1]?.content;
+  const lastMessage = messages[messages.length - 1];
+  const lastMessageContent = lastMessage?.content;
+  const lastMessageId = lastMessage?.id;
+  const lastMessageStreaming = Boolean(lastMessage?.streaming);
+
+  // Build the preceding-query lookup once per message-array change. The
+  // previous implementation did findIndex + slice + reverse for every row,
+  // which made a long chat increasingly expensive to render.
+  const queryByAssistantId = useMemo(() => {
+    const lookup = new Map<string, string>();
+    let latestQuery = "";
+    for (const message of messages) {
+      if (message.role === "user") {
+        latestQuery = message.expandedQuery || message.content;
+      } else {
+        lookup.set(message.id, latestQuery);
+      }
+    }
+    return lookup;
+  }, [messages]);
 
   useEffect(() => {
-    endRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages, lastMessageContent]);
+    // Streaming updates arrive in small batches. Smooth scrolling every
+    // batch queues animations and makes long answers visibly stutter.
+    endRef.current?.scrollIntoView({
+      behavior: lastMessageStreaming ? "auto" : "smooth",
+      block: "end",
+    });
+  }, [lastMessageId, lastMessageContent, lastMessageStreaming]);
 
   const handleEvaluate = async (
     msgId: string,
@@ -52,7 +76,7 @@ export function ChatThread({
     context: RankedChunk[],
     answer: string
   ) => {
-    onUpdateMessage?.(msgId, { evaluationStatus: "evaluating" });
+    onUpdateMessage?.(msgId, { evaluationStatus: "evaluating", evaluationError: undefined });
     try {
       const res = await fetch("/api/evaluate", {
         method: "POST",
@@ -65,17 +89,23 @@ export function ChatThread({
           answer,
         }),
       });
-      if (!res.ok) throw new Error("Evaluation request failed");
-      const data = await res.json();
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || "Evaluation request failed");
+      if (!data.metrics) throw new Error("Evaluator returned no metrics");
       
       onUpdateMessage?.(msgId, {
         evaluationStatus: "completed",
         evaluationMs: data.evaluationMs,
         metrics: data.metrics,
+        evaluationError: undefined,
       });
     } catch (err) {
       console.error("Failed to run accuracy evaluation:", err);
-      onUpdateMessage?.(msgId, { evaluationStatus: "idle" });
+      onUpdateMessage?.(msgId, {
+        evaluationStatus: "idle",
+        evaluationError:
+          err instanceof Error ? err.message : "Evaluation failed. Please retry.",
+      });
     }
   };
 
@@ -94,17 +124,7 @@ export function ChatThread({
           const isUser = m.role === "user";
           const active = !isUser && m.id === activeAssistantId;
 
-          // Find preceding user query for evaluation
-          const messageIndex = messages.findIndex((msg) => msg.id === m.id);
-          const prevUserMsg =
-            messageIndex > 0
-              ? messages
-                  .slice(0, messageIndex)
-                  .reverse()
-                  .find((msg) => msg.role === "user")
-              : null;
-          const queryText =
-            prevUserMsg?.expandedQuery || prevUserMsg?.content || "";
+          const queryText = isUser ? "" : queryByAssistantId.get(m.id) || "";
           const isVn = isVietnamese(queryText || m.content || "");
 
           return (
@@ -175,6 +195,14 @@ export function ChatThread({
                 {/* Accuracy interactive evaluation trigger */}
                 {!isUser && m.content && !m.streaming && m.results && m.results.length > 0 && (
                   <>
+                    {m.evaluationError && (
+                      <div
+                        className="mt-3 rounded-md border border-rose-500/20 bg-rose-500/5 px-2.5 py-2 text-[11px] text-rose-700 dark:text-rose-300"
+                        role="alert"
+                      >
+                        {m.evaluationError}
+                      </div>
+                    )}
                     {(m.evaluationStatus === undefined || m.evaluationStatus === "idle") && (
                       <div className="mt-3 border-t border-[var(--border)] pt-2.5 space-y-1.5 anim-enter">
                         <p className="text-[11px] font-medium text-[var(--fg-subtle)]">
@@ -215,6 +243,11 @@ export function ChatThread({
                     {m.evaluationStatus === "completed" && m.metrics && (
                       <div className="mt-3 border-t border-[var(--border)] pt-2.5 space-y-1.5 text-[11px] anim-enter">
                         <div className="flex flex-wrap gap-2">
+                          {m.metrics.evaluationMethod && (
+                            <span className="inline-flex items-center rounded px-1.5 py-0.5 text-[10px] font-semibold ring-1 ring-inset bg-[var(--bg-panel)] text-[var(--fg-muted)] ring-[var(--border)]">
+                              {m.metrics.evaluationMethod === "llm" ? "LLM evaluated" : "Heuristic fallback"}
+                            </span>
+                          )}
                           <span className={cn(
                             "inline-flex items-center rounded px-1.5 py-0.5 text-[10px] font-semibold ring-1 ring-inset",
                             getMetricColorClass(m.metrics.faithfulness ?? 0)
@@ -237,6 +270,11 @@ export function ChatThread({
                         {m.metrics.faithfulnessReason && (
                           <p className="text-[10px] text-[var(--fg-subtle)] leading-relaxed italic bg-black/5 dark:bg-white/5 rounded p-1.5">
                             {m.metrics.faithfulnessReason}
+                          </p>
+                        )}
+                        {m.metrics.evaluationWarning && (
+                          <p className="rounded-md border border-amber-500/20 bg-amber-500/5 px-1.5 py-1 text-[10px] leading-relaxed text-amber-700 dark:text-amber-300">
+                            {m.metrics.evaluationWarning}
                           </p>
                         )}
                       </div>
@@ -267,4 +305,4 @@ export function ChatThread({
       </div>
     </div>
   );
-}
+});

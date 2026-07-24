@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { useRouter } from "next/navigation";
+import dynamic from "next/dynamic";
 import {
   AlertCircle,
   ArrowUpRight,
@@ -21,12 +22,9 @@ import { AppShell } from "@/components/AppShell";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { DatasetComposer } from "@/components/dataset/DatasetComposer";
 import { DatasetSidebar, type DatasetSummary } from "@/components/dataset/DatasetSidebar";
-import { DocumentDetailDrawer } from "@/components/dataset/DocumentDetailDrawer";
 import { DocumentResultsList } from "@/components/dataset/DocumentResultsList";
-import { ProcessExplainPanel } from "@/components/dataset/ProcessExplainPanel";
 import { RunMetricsStrip } from "@/components/dataset/RunMetricsStrip";
 import { UploadPipelinePanel } from "@/components/dataset/UploadPipelinePanel";
-import { SourceManager } from "@/components/dataset/SourceManager";
 import {
   readStoredRetrievalMode,
   storeRetrievalMode,
@@ -36,7 +34,6 @@ import { LoadingOverlay } from "@/components/LoadingOverlay";
 import { ModeSwitcher } from "@/components/ModeSwitcher";
 import { ResizeHandle } from "@/components/ResizeHandle";
 import { ChatThread } from "@/components/search/ChatThread";
-import { PipelineInspector } from "@/components/pipeline/PipelineInspector";
 import { StepRail } from "@/components/StepRail";
 import type { ChatMessage } from "@/lib/hooks/use-search-chat";
 import { usePanelLayout } from "@/lib/hooks/use-panel-layout";
@@ -45,6 +42,27 @@ import { useUploadSse } from "@/lib/hooks/use-upload-sse";
 import type { RankedDocument } from "@/lib/ir/types";
 import { cn } from "@/lib/utils";
 import { UPLOAD_DEFAULTS } from "@/lib/upload-config";
+
+const DeferredPanel = () => (
+  <div className="min-h-24 animate-pulse rounded-xl bg-[var(--bg-panel)]" aria-label="Loading panel" />
+);
+
+const SourceManager = dynamic(
+  () => import("@/components/dataset/SourceManager").then((mod) => mod.SourceManager),
+  { ssr: false, loading: DeferredPanel },
+);
+const PipelineInspector = dynamic(
+  () => import("@/components/pipeline/PipelineInspector").then((mod) => mod.PipelineInspector),
+  { ssr: false, loading: DeferredPanel },
+);
+const ProcessExplainPanel = dynamic(
+  () => import("@/components/dataset/ProcessExplainPanel").then((mod) => mod.ProcessExplainPanel),
+  { ssr: false, loading: DeferredPanel },
+);
+const DocumentDetailDrawer = dynamic(
+  () => import("@/components/dataset/DocumentDetailDrawer").then((mod) => mod.DocumentDetailDrawer),
+  { ssr: false, loading: () => null },
+);
 
 type Source = {
   id: string;
@@ -101,6 +119,7 @@ export function DatasetChatLayout({
 
   const { state, run, cancel, reset } = useSsePipeline();
   const uploadSse = useUploadSse();
+  const { state: uploadState, upload, uploadDirect } = uploadSse;
   // Only use direct Storage for all files when explicitly enabled. The size
   // gate below still protects Vercel for large files when the public flag is
   // missing, while small local uploads keep the legacy fallback path.
@@ -289,7 +308,7 @@ export function DatasetChatLayout({
     [router],
   );
 
-  const onNew = async () => {
+  const onNew = useCallback(async () => {
     setUiError(null);
     setCreating(true);
     try {
@@ -308,21 +327,21 @@ export function DatasetChatLayout({
     } finally {
       setCreating(false);
     }
-  };
+  }, [goDataset, loadDatasets]);
 
-  const requestDelete = (id: string, name: string) => {
+  const requestDelete = useCallback((id: string, name: string) => {
     setUiError(null);
     setPendingDelete({ id, title: name });
-  };
+  }, []);
 
-  const onToggleCheck = (id: string, checked: boolean) => {
+  const onToggleCheck = useCallback((id: string, checked: boolean) => {
     setCheckedIds((prev) => {
       if (checked) return prev.includes(id) ? prev : [...prev, id];
       return prev.filter((x) => x !== id);
     });
-  };
+  }, []);
 
-  const onRename = async (id: string, newTitle: string) => {
+  const onRename = useCallback(async (id: string, newTitle: string) => {
     setUiError(null);
     const res = await fetch(`/api/notebooks/${id}`, {
       method: "PATCH",
@@ -350,7 +369,7 @@ export function DatasetChatLayout({
     if (notebookId === id) {
       setTitle((data as { title?: string }).title || newTitle);
     }
-  };
+  }, [notebookId]);
 
   /**
    * Optimistic delete: remove from UI immediately, DELETE runs in background.
@@ -404,7 +423,7 @@ export function DatasetChatLayout({
     })();
   };
 
-  const onUpload = async (file: File) => {
+  const onUpload = useCallback(async (file: File) => {
     if (!notebookId) {
       setUiError("Create or select a dataset first.");
       return;
@@ -417,18 +436,18 @@ export function DatasetChatLayout({
         directStorageUploads ||
         file.size > UPLOAD_DEFAULTS.directUploadThresholdBytes;
       if (requiresDirectUpload) {
-        await uploadSse.uploadDirect(`/api/notebooks/${notebookId}/upload`, file);
+        await uploadDirect(`/api/notebooks/${notebookId}/upload`, file);
       } else {
-        await uploadSse.upload(`/api/notebooks/${notebookId}/upload`, file);
+        await upload(`/api/notebooks/${notebookId}/upload`, file);
       }
       await loadNotebook(notebookId);
       await loadDatasets();
     } catch (err) {
       setUiError(err instanceof Error ? err.message : "Upload failed");
     }
-  };
+  }, [directStorageUploads, loadDatasets, loadNotebook, notebookId, upload, uploadDirect]);
 
-  const onSend = async (
+  const onSend = useCallback(async (
     query: string,
     opts: { retrievalMode: RetrievalModeId; llmModel?: string },
   ) => {
@@ -481,7 +500,7 @@ export function DatasetChatLayout({
       llmModel: opts.llmModel,
       ...(extra.length ? { notebookIds: extra } : {}),
     });
-  };
+  }, [checkedIds, notebookId, run, sources.length]);
 
   // Query-time retrieval unit count only (upload always stores 0 chunks).
   const retrievalUnitCount =
@@ -536,7 +555,7 @@ export function DatasetChatLayout({
     [checkedIds, notebookId],
   );
 
-  const uploading = uploadSse.state.status === "running";
+  const uploading = uploadState.status === "running";
   const running = state.status === "running";
   const {
     leftOpen,
@@ -553,6 +572,27 @@ export function DatasetChatLayout({
   } = panel;
 
   const activeMsg = messages.find((m) => m.id === activeAssistantId);
+  const handleSelectAssistant = useCallback((id: string) => {
+    setActiveAssistantId(id);
+    setRightTab("evidence");
+  }, []);
+  const handleUpdateMessage = useCallback(
+    (msgId: string, update: Partial<ChatMessage>) => {
+      setMessages((prev) =>
+        prev.map((msg) => (msg.id === msgId ? { ...msg, ...update } : msg)),
+      );
+    },
+    [],
+  );
+  const handleUpload = useCallback(
+    (file: File) => {
+      void onUpload(file);
+    },
+    [onUpload],
+  );
+  const refreshNotebook = useCallback(() => {
+    return notebookId ? loadNotebook(notebookId) : Promise.resolve();
+  }, [loadNotebook, notebookId]);
 
   return (
     <AppShell fill>
@@ -704,13 +744,13 @@ export function DatasetChatLayout({
             )}
           </div>
 
-          {(uiError || loadError || state.error || uploadSse.state.error) && (
+          {(uiError || loadError || state.error || uploadState.error) && (
             <div
               role="alert"
               className={cn(
                 "alert m-3 shrink-0",
                 /token|context length|maximum context/i.test(
-                  uiError || loadError || state.error || uploadSse.state.error || "",
+                  uiError || loadError || state.error || uploadState.error || "",
                 )
                   ? "alert-warn"
                   : "alert-error",
@@ -718,7 +758,7 @@ export function DatasetChatLayout({
             >
               <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
               <span className="min-w-0 flex-1 break-words line-clamp-3">
-                {uiError || loadError || state.error || uploadSse.state.error}
+                {uiError || loadError || state.error || uploadState.error}
               </span>
             </div>
           )}
@@ -730,16 +770,9 @@ export function DatasetChatLayout({
           <ChatThread
             messages={messages}
             activeAssistantId={activeAssistantId}
-            onSelectAssistant={(id) => {
-              setActiveAssistantId(id);
-              setRightTab("evidence");
-            }}
+            onSelectAssistant={handleSelectAssistant}
             messageType="notebook"
-            onUpdateMessage={(msgId, update) => {
-              setMessages((prev) =>
-                prev.map((msg) => (msg.id === msgId ? { ...msg, ...update } : msg))
-              );
-            }}
+            onUpdateMessage={handleUpdateMessage}
             empty={
               <div className="chat-empty workspace-empty workspace-empty--dataset anim-enter">
                 <div className="workspace-empty-head">
@@ -849,9 +882,9 @@ export function DatasetChatLayout({
             disabled={!notebookId && checkedIds.length === 0}
             running={running}
             uploading={uploading}
-            onSend={(q, opts) => void onSend(q, opts)}
+            onSend={onSend}
             onCancel={cancel}
-            onUpload={notebookId ? (f) => void onUpload(f) : undefined}
+            onUpload={notebookId ? handleUpload : undefined}
             suggestions={recommendationTitles}
             recommendationIds={recommendationIds}
             retrievalMode={retrievalMode}
@@ -993,13 +1026,13 @@ export function DatasetChatLayout({
                   </div>
                   {notebookId && (
                     <>
-                      <UploadPipelinePanel state={uploadSse.state} />
+                      <UploadPipelinePanel state={uploadState} />
                       <SourceManager
                         notebookId={notebookId}
                         sources={sources}
-                        uploadState={uploadSse.state}
+                        uploadState={uploadState}
                         onUpload={onUpload}
-                        onRefresh={() => loadNotebook(notebookId)}
+                        onRefresh={refreshNotebook}
                       />
                     </>
                   )}
@@ -1036,6 +1069,7 @@ export function DatasetChatLayout({
                     </p>
                     <DocumentResultsList
                       documents={state.documents}
+                      retrievalMode={state.metrics?.retrievalMode}
                       activeId={selectedDoc?.documentId}
                       onSelect={(doc) => {
                         setSelectedDoc(doc);

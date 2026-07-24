@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { memo, useEffect, useState } from "react";
 import {
   CornerDownLeft,
   Loader2,
@@ -14,7 +14,7 @@ import { handleSubmitOnEnter } from "@/lib/keyboard";
 import type { RetrievalModeId } from "@/lib/ir/retrieval-modes";
 import { cn } from "@/lib/utils";
 
-export function DatasetComposer({
+export const DatasetComposer = memo(function DatasetComposer({
   disabled,
   running,
   onSend,
@@ -49,7 +49,7 @@ export function DatasetComposer({
 
   useEffect(() => {
     const trimmed = query.trim();
-    if (trimmed.length < 2 || recommendationIds.length === 0) {
+    if (trimmed.length < 3 || recommendationIds.length === 0) {
       return;
     }
 
@@ -72,7 +72,7 @@ export function DatasetComposer({
         .catch(() => {
           if (!controller.signal.aborted) setDatabaseSuggestions([]);
         });
-    }, 220);
+    }, 400);
 
     return () => {
       window.clearTimeout(timer);
@@ -235,4 +235,4 @@ export function DatasetComposer({
       </div>
     </div>
   );
-}
+});

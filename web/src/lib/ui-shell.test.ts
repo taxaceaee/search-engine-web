@@ -95,6 +95,8 @@ describe("UI redesign — shared shell & tokens (shipped sources)", () => {
     const thread = readSrc("components", "search", "ChatThread.tsx");
     expect(thread).toContain("anim-message");
     expect(thread).toContain("thinking-dot");
+    expect(thread).toContain('behavior: lastMessageStreaming ? "auto" : "smooth"');
+    expect(thread).toContain('block: "end"');
   });
 
   it("AppShell keeps the workspace mood with a shared primary rail", () => {
@@ -434,7 +436,7 @@ describe("UI redesign — shared shell & tokens (shipped sources)", () => {
     expect(docs).toContain("Hits");
     expect(docs).toContain("formatMetric(doc.bm25Best, 2)");
     expect(docs).toContain("formatMetric(doc.denseBest, 2)");
-    expect(docs).toContain("Missing values are shown as 0");
+    expect(docs).toContain("An em dash means this document had no lexical hit");
     expect(docs).not.toMatch(/\bchunks\b/);
 
     const metrics = readSrc("components", "dataset", "RunMetricsStrip.tsx");

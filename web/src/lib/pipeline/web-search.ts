@@ -136,11 +136,7 @@ export async function runWebSearchPipeline(
   timing.bm25Ms = retrieval.diagnostics.bm25Ms;
   timing.denseMs = retrieval.diagnostics.denseMs;
   timing.fusionMs = retrieval.diagnostics.fusionMs;
-  timing.rankMs =
-    (timing.bm25Ms ?? 0) +
-    (timing.embeddingMs ?? 0) +
-    (timing.denseMs ?? 0) +
-    (timing.fusionMs ?? 0);
+  timing.rankMs = Math.max(0, timing.retrieveMs - timing.packMs);
   metrics.contextCount = results.length;
   metrics.sourcesUsed = new Set(results.map((r) => r.documentId)).size;
   metrics.retrievalMode = retrieval.diagnostics.mode;

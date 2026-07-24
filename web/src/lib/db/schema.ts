@@ -39,6 +39,8 @@ export const sources = pgTable("sources", {
   title: text("title").notNull(),
   mime: text("mime"),
   text: text("text").notNull(),
+  /** Cached length so list/read APIs never need to transfer full documents. */
+  charCount: integer("char_count"),
   blobUrl: text("blob_url"),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
 });

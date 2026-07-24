@@ -127,4 +127,81 @@ describe("indexNotebookEmbeddings (pre-store vectors)", () => {
     expect(hotRes.results.length).toBeGreaterThan(0);
     expect(coldRes.results.length).toBeGreaterThan(0);
   });
+
+  it("stores lexical chunks when dense embedding is unavailable", async () => {
+    const nb = await createNotebook("Lexical-only index test");
+    touched.push(nb.id);
+    await addSource({
+      notebookId: nb.id,
+      title: "raw.txt",
+      mime: "text/plain",
+      text: "BM25 lexical retrieval should not re-parse this source per query.",
+    });
+
+    delete process.env.EMBEDDING_API_KEY;
+    const indexed = await indexNotebookEmbeddings(nb.id);
+    expect(indexed.status).toBe("skipped");
+    expect(indexed.unitCount).toBeGreaterThan(0);
+    expect(indexed.embeddedCount).toBe(0);
+
+    const chunks = await loadChunks(nb.id, undefined, { includeEmbeddings: false });
+    expect(chunks.length).toBe(indexed.unitCount);
+    expect(chunks.every((chunk) => !chunk.embedding)).toBe(true);
+  });
+
+  it("indexes a newly uploaded source without dropping older sources", async () => {
+    const nb = await createNotebook("Incremental index test");
+    touched.push(nb.id);
+    const first = await addSource({
+      notebookId: nb.id,
+      title: "first.txt",
+      mime: "text/plain",
+      text: "The first document contains the baseline retrieval claim.",
+    });
+    const firstIndex = await indexNotebookEmbeddings(nb.id);
+    expect(firstIndex.status).toBe("ready");
+
+    const second = await addSource({
+      notebookId: nb.id,
+      title: "second.txt",
+      mime: "text/plain",
+      text: "The second document contains the newly uploaded claim.",
+    });
+    const incremental = await indexNotebookEmbeddings(nb.id, {
+      sourceIds: [second.id],
+    });
+    expect(incremental.status).toBe("ready");
+
+    const chunks = await loadChunks(nb.id);
+    expect(new Set(chunks.map((chunk) => chunk.documentId))).toEqual(
+      new Set([first.id, second.id]),
+    );
+  });
+
+  it("serializes concurrent source indexes for one notebook", async () => {
+    const nb = await createNotebook("Concurrent index test");
+    touched.push(nb.id);
+    const one = await addSource({
+      notebookId: nb.id,
+      title: "one.txt",
+      mime: "text/plain",
+      text: "Concurrent indexing source one.",
+    });
+    const two = await addSource({
+      notebookId: nb.id,
+      title: "two.txt",
+      mime: "text/plain",
+      text: "Concurrent indexing source two.",
+    });
+
+    await Promise.all([
+      indexNotebookEmbeddings(nb.id, { sourceIds: [one.id] }),
+      indexNotebookEmbeddings(nb.id, { sourceIds: [two.id] }),
+    ]);
+
+    const chunks = await loadChunks(nb.id);
+    expect(new Set(chunks.map((chunk) => chunk.documentId))).toEqual(
+      new Set([one.id, two.id]),
+    );
+  });
 });

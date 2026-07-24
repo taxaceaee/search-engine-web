@@ -1,6 +1,7 @@
 import { Check, Loader2, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { Timing } from "@/lib/ir/types";
+import { corpusTimingMs } from "@/lib/ir/timing";
 
 const labels: Record<string, string> = {
   expand: "Context",
@@ -89,11 +90,7 @@ function stepDuration(step: string, timing?: Timing | null) {
   if (!timing) return undefined;
   switch (step) {
     case "corpus":
-      return (
-        (timing.notebookLookupMs ?? 0) +
-        (timing.corpusLoadMs ?? 0) +
-        (timing.corpusMergeMs ?? 0)
-      );
+      return corpusTimingMs(timing);
     case "search":
       return timing.searchMs;
     case "fetch":

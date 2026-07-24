@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { memo, useMemo, useState } from "react";
 import Link from "next/link";
 import {
   BookOpen,
@@ -41,7 +41,7 @@ function relativeTime(iso: string): string {
   return new Date(iso).toLocaleDateString();
 }
 
-export function DatasetSidebar({
+export const DatasetSidebar = memo(function DatasetSidebar({
   items,
   currentId,
   checkedIds,
@@ -348,4 +348,4 @@ export function DatasetSidebar({
       </div>
     </aside>
   );
-}
+});

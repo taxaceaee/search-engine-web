@@ -32,6 +32,7 @@ export async function processNotebookUpload(
     filename: upload.originalFilename,
     bytes: upload.byteSize,
   });
+  let progressWrite = Promise.resolve();
 
   try {
     await updateNotebookUpload(notebookId, uploadId, {
@@ -94,16 +95,42 @@ export async function processNotebookUpload(
       sourceId: source.id,
     });
 
+    // Progress events can arrive once per embedding batch. Persisting every
+    // event creates a Supabase write burst and competes with index inserts.
+    // Keep stage changes immediate, but throttle same-stage progress updates.
+    let lastProgress = -1;
+    let lastProgressKey = "";
+    const updateProgress = (patch: Parameters<typeof updateNotebookUpload>[2]) => {
+      const progress = patch.progress ?? lastProgress;
+      const key = `${patch.status || ""}:${patch.stage || ""}`;
+      const stageChanged = key !== lastProgressKey;
+      const meaningful =
+        stageChanged || progress >= 98 || progress - lastProgress >= 5;
+      if (!meaningful) return;
+      lastProgress = progress;
+      lastProgressKey = key;
+      progressWrite = progressWrite
+        .then(() => updateNotebookUpload(notebookId, uploadId, patch))
+        .then(() => undefined)
+        .catch((err) => {
+          console.warn(
+            "[upload] progress update failed:",
+            err instanceof Error ? err.message : err,
+          );
+        });
+    };
+
     const indexResult = await indexNotebookEmbeddings(notebookId, {
+      sourceIds: [source.id],
       onProgress: (event) => {
         if (event.type === "chunk_started") {
-          void updateNotebookUpload(notebookId, uploadId, {
+          updateProgress({
             status: "chunking",
             stage: "chunk",
             progress: 35,
           });
         } else if (event.type === "chunk_completed") {
-          void updateNotebookUpload(notebookId, uploadId, {
+          updateProgress({
             status: "embedding",
             stage: "embed",
             progress: 45,
@@ -112,13 +139,13 @@ export async function processNotebookUpload(
           const progress = event.total > 0
             ? Math.min(95, 45 + Math.round((event.done / event.total) * 45))
             : 45;
-          void updateNotebookUpload(notebookId, uploadId, {
+          updateProgress({
             status: event.message.toLowerCase().includes("writing") ? "persisting" : "embedding",
             stage: event.message.toLowerCase().includes("writing") ? "persist" : "embed",
             progress,
           });
         } else if (event.type === "persist_completed") {
-          void updateNotebookUpload(notebookId, uploadId, {
+          updateProgress({
             status: "persisting",
             stage: "persist",
             progress: 98,
@@ -131,6 +158,10 @@ export async function processNotebookUpload(
     if (indexResult.status === "failed") {
       throw new Error(indexResult.message);
     }
+
+    // Keep progress writes ordered so a late 98% update cannot overwrite the
+    // terminal completed state.
+    await progressWrite;
 
     const timing = {
       extractMs,
@@ -169,6 +200,7 @@ export async function processNotebookUpload(
     return { status: "completed" as const, sourceId: source.id };
   } catch (err) {
     const message = err instanceof Error ? err.message : "Upload processing failed";
+    await progressWrite;
     await updateNotebookUpload(notebookId, uploadId, {
       status: "failed",
       stage: "complete",
@@ -239,6 +271,7 @@ export async function processStatelessNotebookUpload(
     });
 
     const indexResult = await indexNotebookEmbeddings(notebookId, {
+      sourceIds: [source.id],
       onProgress: emit,
     });
     if (indexResult.status === "failed") {

@@ -107,8 +107,26 @@ describe("buildTimingWaterfall", () => {
     );
     const last = bars[bars.length - 1];
     expect(last.offsetFraction + last.fraction).toBeLessThanOrEqual(1.0001);
-    expect(bars.find((b) => b.id === "bm25")?.ms).toBe(10);
+    expect(bars.find((b) => b.id === "rank")?.ms).toBe(55);
     expect(bars.find((b) => b.id === "generate")?.ms).toBe(50);
+  });
+
+  it("does not add overlapping BM25 and embedding timings", () => {
+    const bars = buildTimingWaterfall(
+      {
+        bm25Ms: 100,
+        embeddingMs: 120,
+        fusionMs: 5,
+        rankMs: 125,
+        packMs: 2,
+        generateMs: 50,
+        totalMs: 180,
+      },
+      metricsHybrid,
+    );
+    expect(bars.find((b) => b.id === "rank")?.ms).toBe(125);
+    expect(bars.some((b) => b.id === "bm25" || b.id === "embedding")).toBe(false);
+    expect(bars.reduce((sum, bar) => sum + bar.ms, 0)).toBe(180);
   });
 });
 

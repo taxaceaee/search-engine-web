@@ -84,12 +84,13 @@
   --motion-fast: 160ms;
   --motion: 220ms;
   --motion-slow: 360ms;
-  /* DM Sans (body) + Space Grotesk (display) — compact professional SaaS type */
-  --font-sans: var(--font-dm-sans), ui-sans-serif, system-ui, "Segoe UI",
-    sans-serif;
-  --font-display: var(--font-space-grotesk), var(--font-dm-sans), ui-sans-serif,
-    system-ui, sans-serif;
-  --font-mono: var(--font-jetbrains), ui-monospace, monospace;
+  /* Network-independent stacks preserve the hierarchy without build-time font fetches. */
+  --font-dm-sans: "DM Sans", ui-sans-serif, system-ui, "Segoe UI", sans-serif;
+  --font-space-grotesk: "Space Grotesk", var(--font-dm-sans), ui-sans-serif, system-ui, sans-serif;
+  --font-jetbrains: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+  --font-sans: var(--font-dm-sans);
+  --font-display: var(--font-space-grotesk);
+  --font-mono: var(--font-jetbrains);
   --text-base: 1rem; /* 16px */
   --text-sm: 0.9375rem; /* 15px */
   --text-xs: 0.8125rem; /* 13px */

@@ -240,8 +240,8 @@ describe("retrieval latency profile (shipped path)", () => {
       timestamp: new Date().toISOString(),
       notes: [
         "Synthetic raw-source units (embedding=null) mirror production demos",
-        "BM25 re-tokenizes entire corpus every query (no inverted index)",
-        "adaptive_rrf embeds query + up to maxDenseChunks full texts when vectors missing",
+        "BM25 caches tokenization, document frequency, and term frequencies per immutable corpus",
+        "adaptive_rrf embeds missing corpus units only within the configured live budget; larger/raw PDF corpora use immediate BM25 fallback",
         "hybridLiveEmbed uses real EMBEDDING_* from process/.env.local",
       ],
       bm25Scale: bm25Rows,
@@ -264,10 +264,14 @@ describe("retrieval latency profile (shipped path)", () => {
       },
       hybridLiveEmbed: hybridLive,
       codeHotspots: {
-        maxDenseChunks: 160,
-        hybridEmbedsMissingVectors: true,
+        maxDenseChunks: 512,
+        maxLiveDenseMissing: 8,
+        maxLiveDenseChars: 12000,
+        hybridEmbedsMissingVectorsWithinBudget: true,
         rawSourcesAlwaysMissingVectors: true,
-        bm25FullCorpusScanPerQuery: true,
+        bm25FullCorpusScanPerQuery: false,
+        bm25PostingsCandidatePruning: true,
+        bm25TermFrequencyMapsCached: true,
       },
     };
 

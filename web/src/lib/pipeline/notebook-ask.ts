@@ -123,12 +123,6 @@ export async function runNotebookAskPipeline(
   timing.bm25Ms = retrieval.diagnostics.bm25Ms;
   timing.denseMs = retrieval.diagnostics.denseMs;
   timing.fusionMs = retrieval.diagnostics.fusionMs;
-  timing.rankMs =
-    (timing.bm25Ms ?? 0) +
-    (timing.embeddingMs ?? 0) +
-    (timing.denseMs ?? 0) +
-    (timing.fusionMs ?? 0);
-
   emit({
     type: "bm25_completed",
     ms: timing.bm25Ms ?? 0,
@@ -162,6 +156,9 @@ export async function runNotebookAskPipeline(
   const results = packContext(candidates, contextTopK, 3);
   timing.packMs = elapsed(packStart);
   timing.retrieveMs = elapsed(retrieveStart);
+  // Retrieval components can overlap (for example BM25 and query embedding).
+  // Keep their individual values as diagnostics, but aggregate wall time.
+  timing.rankMs = Math.max(0, timing.retrieveMs - timing.packMs);
 
   emit({
     type: "pack_completed",
@@ -252,6 +249,16 @@ export async function runNotebookAskPipeline(
   }
 
   timing.totalMs = elapsed(totalStart);
+  const namedMs =
+    notebookLookupMs +
+    corpusLoadMs +
+    corpusMergeMs +
+    (timing.queryProcessMs ?? 0) +
+    (timing.rankMs ?? 0) +
+    (timing.packMs ?? 0) +
+    (timing.generateMs ?? 0);
+  timing.totalMs = Math.max(timing.totalMs, namedMs);
+  timing.overheadMs = Math.max(0, timing.totalMs - namedMs);
   emit({
     type: "run_completed",
     answer,

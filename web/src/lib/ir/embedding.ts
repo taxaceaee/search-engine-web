@@ -24,6 +24,46 @@ const embeddingCircuits =
   globalForEmbedding.__embeddingCircuits ?? new Map<string, EmbeddingCircuit>();
 globalForEmbedding.__embeddingCircuits = embeddingCircuits;
 
+type QueryEmbeddingCacheEntry = {
+  embedding: number[];
+  expiresAt: number;
+};
+
+const globalForEmbeddingCache = globalThis as unknown as {
+  __queryEmbeddingCache?: Map<string, QueryEmbeddingCacheEntry>;
+};
+const queryEmbeddingCache =
+  globalForEmbeddingCache.__queryEmbeddingCache ??
+  new Map<string, QueryEmbeddingCacheEntry>();
+globalForEmbeddingCache.__queryEmbeddingCache = queryEmbeddingCache;
+
+const QUERY_EMBEDDING_CACHE_TTL_MS = 2 * 60 * 1000;
+const QUERY_EMBEDDING_CACHE_MAX_ENTRIES = 128;
+
+function getCachedQueryEmbedding(key: string) {
+  const entry = queryEmbeddingCache.get(key);
+  if (!entry || entry.expiresAt <= Date.now()) {
+    if (entry) queryEmbeddingCache.delete(key);
+    return null;
+  }
+  queryEmbeddingCache.delete(key);
+  queryEmbeddingCache.set(key, entry);
+  return [...entry.embedding];
+}
+
+function setCachedQueryEmbedding(key: string, embedding: number[]) {
+  queryEmbeddingCache.delete(key);
+  queryEmbeddingCache.set(key, {
+    embedding: [...embedding],
+    expiresAt: Date.now() + QUERY_EMBEDDING_CACHE_TTL_MS,
+  });
+  while (queryEmbeddingCache.size > QUERY_EMBEDDING_CACHE_MAX_ENTRIES) {
+    const oldest = queryEmbeddingCache.keys().next().value as string | undefined;
+    if (!oldest) break;
+    queryEmbeddingCache.delete(oldest);
+  }
+}
+
 function resolveEmbeddingTimeout(timeoutMs?: number) {
   if (timeoutMs != null && Number.isFinite(timeoutMs) && timeoutMs > 0) {
     return Math.floor(timeoutMs);
@@ -159,6 +199,25 @@ export async function embedTexts(
   }
   if (circuit) embeddingCircuits.delete(circuitKey);
 
+  // Query-time retrieval normally embeds one query at a time. Cache only
+  // single-text requests so indexing batches never consume the query cache.
+  // The cache is process-local by design; correctness is preserved because
+  // embeddings are keyed by endpoint, model, and exact normalized input.
+  const queryCacheKey =
+    input.length === 1
+      ? `${cfg.EMBEDDING_PROVIDER}:${endpoint}:${model}:${input[0]}`
+      : null;
+  if (queryCacheKey && !options?.signal?.aborted) {
+    const cached = getCachedQueryEmbedding(queryCacheKey);
+    if (cached) {
+      return {
+        embeddings: [cached],
+        provider: cfg.EMBEDDING_PROVIDER as EmbeddingProvider,
+        model,
+      };
+    }
+  }
+
   const controller = new AbortController();
   let timedOut = false;
   const timer = setTimeout(() => {
@@ -224,8 +283,13 @@ export async function embedTexts(
   validateEmbeddings(vectors, input.length);
   embeddingCircuits.delete(circuitKey);
 
+  const normalizedVectors = vectors.map(normalizeVector);
+  if (queryCacheKey && normalizedVectors[0]) {
+    setCachedQueryEmbedding(queryCacheKey, normalizedVectors[0]);
+  }
+
   return {
-    embeddings: vectors.map(normalizeVector),
+    embeddings: normalizedVectors,
     provider: cfg.EMBEDDING_PROVIDER as EmbeddingProvider,
     model,
   };

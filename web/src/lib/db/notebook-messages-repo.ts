@@ -175,7 +175,7 @@ export async function listNotebookMessages(
   if (sb) {
     const { data, error } = await sb
       .from("notebook_messages")
-      .select("*")
+      .select("id,notebook_id,user_id,role,content,results_json,timing_json,metrics_json,documents_json,status,created_at")
       .eq("notebook_id", notebookId)
       .eq("user_id", userId)
       .order("created_at", { ascending: true });
@@ -338,23 +338,32 @@ export async function updateNotebookMessageMetrics(
   metrics: Metrics,
 ): Promise<NotebookMessageDto | null> {
   assertDurableDb("Update notebook message metrics");
+  const mergeMetrics = (previous: unknown): Metrics => ({
+    ...(previous && typeof previous === "object" ? (previous as Metrics) : {}),
+    ...metrics,
+  });
 
   if (!hasDb()) {
     const existing = memNotebookMessages.get(id);
     if (!existing) return null;
-    const next = { ...existing, metrics };
+    const next = { ...existing, metrics: mergeMetrics(existing.metrics) };
     memNotebookMessages.set(id, next);
     return memToDto(next);
   }
 
   const sb = getSupabaseAdmin();
   if (sb) {
-    const { data, error: getErr } = await sb.from("notebook_messages").select("*").eq("id", id).maybeSingle();
+    const { data, error: getErr } = await sb
+      .from("notebook_messages")
+      .select("id,notebook_id,user_id,role,content,results_json,timing_json,metrics_json,documents_json,status,created_at")
+      .eq("id", id)
+      .maybeSingle();
     if (getErr || !data) return null;
 
+    const mergedMetrics = mergeMetrics(data.metrics_json);
     const { error } = await sb
       .from("notebook_messages")
-      .update({ metrics_json: metrics })
+      .update({ metrics_json: mergedMetrics })
       .eq("id", id);
     if (error) {
       throw new Error(`Update notebook message metrics failed: ${sbError(error)}`);
@@ -368,7 +377,7 @@ export async function updateNotebookMessageMetrics(
       content: data.content,
       results: data.results_json as RankedChunk[] | null,
       timing: data.timing_json as Timing | null,
-      metrics,
+      metrics: mergedMetrics,
       documents: data.documents_json as RankedDocument[] | null,
       status: data.status,
       createdAt: toIso(data.created_at),
@@ -384,9 +393,10 @@ export async function updateNotebookMessageMetrics(
       .then((rows) => rows[0]);
     if (!existing) return null;
 
+    const mergedMetrics = mergeMetrics(existing.metricsJson);
     await db
       .update(notebookMessages)
-      .set({ metricsJson: metrics })
+      .set({ metricsJson: mergedMetrics })
       .where(eq(notebookMessages.id, id));
 
     return {
@@ -397,7 +407,7 @@ export async function updateNotebookMessageMetrics(
       content: existing.content,
       results: existing.resultsJson as RankedChunk[] | null,
       timing: existing.timingJson as Timing | null,
-      metrics,
+      metrics: mergedMetrics,
       documents: existing.documentsJson as RankedDocument[] | null,
       status: existing.status,
       createdAt: existing.createdAt.toISOString(),

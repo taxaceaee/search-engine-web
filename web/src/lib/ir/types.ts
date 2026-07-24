@@ -71,8 +71,10 @@ export type Timing = {
   denseMs?: number;
   fusionMs?: number;
   packMs?: number;
-  /** bm25 + dense + fusion wall (excludes pack when split) */
+  /** Retrieval/ranking wall time, excluding pack. Component timings may overlap. */
   rankMs?: number;
+  /** End-to-end time not assigned to a named top-level stage. */
+  overheadMs?: number;
   ttftMs?: number;
   extractMs?: number;
   /** Dense embed stage during notebook index */
@@ -133,6 +135,10 @@ export type Metrics = {
   contextRelevancy?: number;
   contextRelevancyReason?: string;
   evaluationMs?: number;
+  /** How the accuracy metrics were produced. */
+  evaluationMethod?: "llm" | "heuristic_fallback";
+  evaluationModel?: string;
+  evaluationWarning?: string;
   eval?: {
     dataset?: "scifact" | "scidocs" | string;
     recallAt10?: number;

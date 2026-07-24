@@ -1,4 +1,5 @@
 import { generateText } from "ai";
+import { z } from "zod";
 import { createLlmProvider } from "./client";
 import { getConfig } from "@/lib/config";
 import type { RankedChunk } from "@/lib/ir/types";
@@ -10,7 +11,20 @@ export interface EvalMetrics {
   answerRelevancyReason: string;
   contextRelevancy: number;
   contextRelevancyReason: string;
+  evaluationMethod: "llm" | "heuristic_fallback";
+  evaluationModel?: string;
+  evaluationWarning?: string;
+  evaluationMs?: number;
 }
+
+const evaluatorResponseSchema = z.object({
+  faithfulness: z.number().finite(),
+  faithfulnessReason: z.string().trim().min(1).max(1200),
+  answerRelevancy: z.number().finite(),
+  answerRelevancyReason: z.string().trim().min(1).max(1200),
+  contextRelevancy: z.number().finite(),
+  contextRelevancyReason: z.string().trim().min(1).max(1200),
+});
 
 export async function evaluateRAG(params: {
   query: string;
@@ -19,7 +33,12 @@ export async function evaluateRAG(params: {
 }): Promise<EvalMetrics> {
   const cfg = getConfig();
   if (!cfg.hasLlm || !cfg.LLM_API_KEY) {
-    return computeFallbackMetrics(params.query, params.context, params.answer);
+    return computeFallbackMetrics(
+      params.query,
+      params.context,
+      params.answer,
+      "LLM evaluator is not configured; heuristic fallback was used.",
+    );
   }
 
   try {
@@ -80,26 +99,27 @@ Return your response strictly in the following JSON format:
 
     const jsonMatch = text.match(/\{[\s\S]*\}/);
     if (jsonMatch) {
-      const parsed = JSON.parse(jsonMatch[0]);
-      if (
-        typeof parsed.faithfulness === "number" &&
-        typeof parsed.answerRelevancy === "number" &&
-        typeof parsed.contextRelevancy === "number"
-      ) {
-        return {
-          faithfulness: clampScore(parsed.faithfulness),
-          faithfulnessReason: parsed.faithfulnessReason || "Evaluated by LLM",
-          answerRelevancy: clampScore(parsed.answerRelevancy),
-          answerRelevancyReason: parsed.answerRelevancyReason || "Evaluated by LLM",
-          contextRelevancy: clampScore(parsed.contextRelevancy),
-          contextRelevancyReason: parsed.contextRelevancyReason || "Evaluated by LLM",
-        };
-      }
+      const parsed = evaluatorResponseSchema.parse(JSON.parse(jsonMatch[0]));
+      return {
+        faithfulness: clampScore(parsed.faithfulness),
+        faithfulnessReason: parsed.faithfulnessReason,
+        answerRelevancy: clampScore(parsed.answerRelevancy),
+        answerRelevancyReason: parsed.answerRelevancyReason,
+        contextRelevancy: clampScore(parsed.contextRelevancy),
+        contextRelevancyReason: parsed.contextRelevancyReason,
+        evaluationMethod: "llm",
+        evaluationModel: cfg.LLM_MODEL,
+      };
     }
     throw new Error("Invalid response format from evaluator");
   } catch (error) {
     console.warn("LLM evaluation failed, using fallback:", error);
-    return computeFallbackMetrics(params.query, params.context, params.answer);
+    return computeFallbackMetrics(
+      params.query,
+      params.context,
+      params.answer,
+      "LLM evaluator failed; heuristic fallback was used.",
+    );
   }
 }
 
@@ -111,7 +131,8 @@ function clampScore(score: number): number {
 function computeFallbackMetrics(
   query: string,
   context: RankedChunk[],
-  answer: string
+  answer: string,
+  warning: string,
 ): EvalMetrics {
   let faithfulness = 0.5;
   let faithfulnessReason = "Context is empty, cannot verify grounding.";
@@ -167,7 +188,9 @@ function computeFallbackMetrics(
     answerRelevancy: clampScore(answerRelevancy + variance),
     answerRelevancyReason,
     contextRelevancy: clampScore(contextRelevancy + (context.length > 0 ? variance : 0)),
-    contextRelevancyReason
+    contextRelevancyReason,
+    evaluationMethod: "heuristic_fallback",
+    evaluationWarning: warning,
   };
 }
 

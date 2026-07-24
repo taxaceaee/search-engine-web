@@ -307,7 +307,7 @@ export async function getSession(
   if (sb) {
     const { data, error } = await sb
       .from("search_sessions")
-      .select("*")
+      .select("id,user_id,title,summary,entities_json,created_at,updated_at")
       .eq("id", id)
       .maybeSingle();
     if (!error && data) {
@@ -368,7 +368,7 @@ export async function listMessages(sessionId: string): Promise<SearchMessageDto[
   if (sb) {
     const { data, error } = await sb
       .from("search_messages")
-      .select("*")
+      .select("id,session_id,role,content,expanded_query,results_json,timing_json,metrics_json,status,created_at")
       .eq("session_id", sessionId)
       .order("created_at", { ascending: true });
     if (error) {
@@ -613,23 +613,32 @@ export async function updateSearchMessageMetrics(
   metrics: Metrics,
 ): Promise<SearchMessageDto | null> {
   assertDurableDb('Update message metrics');
+  const mergeMetrics = (previous: unknown): Metrics => ({
+    ...(previous && typeof previous === "object" ? (previous as Metrics) : {}),
+    ...metrics,
+  });
   
   if (!hasDb()) {
     const existing = memMessages.get(id);
     if (!existing) return null;
-    const next = { ...existing, metrics };
+    const next = { ...existing, metrics: mergeMetrics(existing.metrics) };
     memMessages.set(id, next);
     return next;
   }
 
   const sb = getSupabaseAdmin();
   if (sb) {
-    const { data, error: getErr } = await sb.from("search_messages").select("*").eq("id", id).maybeSingle();
+    const { data, error: getErr } = await sb
+      .from("search_messages")
+      .select("id,session_id,role,content,expanded_query,results_json,timing_json,metrics_json,status,created_at")
+      .eq("id", id)
+      .maybeSingle();
     if (getErr || !data) return null;
     
+    const mergedMetrics = mergeMetrics(data.metrics_json);
     const { error } = await sb
       .from("search_messages")
-      .update({ metrics_json: metrics })
+      .update({ metrics_json: mergedMetrics })
       .eq("id", id);
     if (error) {
       throw new Error(`Update search message metrics failed: ${sbError(error)}`);
@@ -643,7 +652,7 @@ export async function updateSearchMessageMetrics(
       expandedQuery: data.expanded_query,
       results: data.results_json as RankedChunk[] | null,
       timing: data.timing_json as Timing | null,
-      metrics,
+      metrics: mergedMetrics,
       status: data.status,
       createdAt: toIso(data.created_at),
     };
@@ -658,9 +667,10 @@ export async function updateSearchMessageMetrics(
       .then((rows) => rows[0]);
     if (!existing) return null;
 
+    const mergedMetrics = mergeMetrics(existing.metricsJson);
     await db
       .update(searchMessages)
-      .set({ metricsJson: metrics })
+      .set({ metricsJson: mergedMetrics })
       .where(eq(searchMessages.id, id));
 
     return {
@@ -671,7 +681,7 @@ export async function updateSearchMessageMetrics(
       expandedQuery: existing.expandedQuery,
       results: existing.resultsJson as RankedChunk[] | null,
       timing: existing.timingJson as Timing | null,
-      metrics,
+      metrics: mergedMetrics,
       status: existing.status,
       createdAt: existing.createdAt.toISOString(),
     };

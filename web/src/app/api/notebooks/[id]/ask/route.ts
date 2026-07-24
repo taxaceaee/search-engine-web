@@ -1,7 +1,8 @@
 import { z } from "zod";
+import { after } from "next/server";
 import { requireUserId } from "@/lib/auth";
-import { getConfig } from "@/lib/config";
-import { getNotebook, loadChunks } from "@/lib/db/notebooks-repo";
+import { getConfig, IR_DEFAULTS } from "@/lib/config";
+import { getChunkStats, getNotebook, loadChunks } from "@/lib/db/notebooks-repo";
 import { addNotebookMessage } from "@/lib/db/notebook-messages-repo";
 import { runNotebookAskPipeline } from "@/lib/pipeline/notebook-ask";
 import { createSseResponse } from "@/lib/sse";
@@ -9,6 +10,7 @@ import {
   parseRetrievalMode,
   RETRIEVAL_MODE_IDS,
 } from "@/lib/ir/retrieval-modes";
+import { elapsed, nowMs } from "@/lib/utils";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -64,9 +66,15 @@ export async function POST(
     return Response.json({ error: "Invalid body" }, { status: 400 });
   }
 
-  const notebookLookupStart = Date.now();
-  const notebook = await getNotebook(id);
-  const notebookLookupMs = Date.now() - notebookLookupStart;
+  const notebookLookupStart = nowMs();
+  // Metadata columns are absent/stale on older notebooks. Count chunks in
+  // parallel with the notebook lookup so dense completeness is decided from
+  // the actual corpus without adding a serial round trip.
+  const [notebook, chunkStats] = await Promise.all([
+    getNotebook(id),
+    getChunkStats(id, { includeSourceCoverage: true }).catch(() => null),
+  ]);
+  const notebookLookupMs = elapsed(notebookLookupStart);
   if (!notebook) {
     return Response.json({ error: "Notebook not found" }, { status: 404 });
   }
@@ -85,26 +93,71 @@ export async function POST(
     parseRetrievalMode(cfg.RETRIEVAL_MODE),
   );
   // BM25 and the legacy branch intentionally do not consume stored vectors.
+  // If metadata proves the dense index is incomplete, use the same BM25
+  // fallback that retrieval would eventually choose without downloading a
+  // large JSON vector payload or making a live embedding call first.
+  const corpusUnitCount = chunkStats?.unitCount || notebook.unitCount;
+  const corpusEmbeddedCount = chunkStats
+    ? chunkStats.embeddedCount
+    : notebook.embeddedCount;
+  const knownIncompleteDenseIndex =
+    (corpusUnitCount > 0 && corpusEmbeddedCount < corpusUnitCount) ||
+    Boolean(
+      chunkStats &&
+        chunkStats.sourceCount != null &&
+        chunkStats.indexedSourceCount != null &&
+        chunkStats.indexedSourceCount < chunkStats.sourceCount,
+    );
   const includeEmbeddings =
-    retrievalMode !== "bm25" && retrievalMode !== "legacy_rrf_ce";
+    retrievalMode !== "bm25" &&
+    retrievalMode !== "legacy_rrf_ce" &&
+    !knownIncompleteDenseIndex;
+  const bm25CandidateLimit = Math.min(
+    1000,
+    Math.max(240, (parsed.data.retrieveTopK ?? 20) * 8),
+  );
+  const bm25MinCandidates = parsed.data.retrieveTopK ?? 20;
+  // For a large complete index, FTS can safely narrow the dense payload to
+  // the same 512-unit ceiling already used before dense ranking. If FTS is
+  // unavailable or returns fewer candidates, loadChunks keeps full fallback.
+  const densePrefilter =
+    retrievalMode === "adaptive_rrf" &&
+    includeEmbeddings &&
+    corpusUnitCount > IR_DEFAULTS.maxDenseChunks;
 
   return createSseResponse(async (emit, { signal }) => {
     emit({ type: "corpus_loading" });
-    const loadStart = Date.now();
+    const loadStart = nowMs();
     const chunkLists = await Promise.all(
       corpusIds.map((nid) =>
         loadChunks(
           nid,
           // source filter only applies to the primary notebook workspace
           nid === id ? parsed.data.sourceIds : undefined,
-          { includeEmbeddings },
+          {
+            includeEmbeddings,
+            searchQuery:
+              retrievalMode === "bm25" || densePrefilter ? query : undefined,
+            searchCandidateLimit:
+              retrievalMode === "bm25"
+                ? bm25CandidateLimit
+                : densePrefilter
+                  ? IR_DEFAULTS.maxDenseChunks
+                  : undefined,
+            searchMinCandidates:
+              retrievalMode === "bm25"
+                ? bm25MinCandidates
+                : densePrefilter
+                  ? IR_DEFAULTS.maxDenseChunks
+                  : undefined,
+          },
         ),
       ),
     );
-    const corpusLoadMs = Date.now() - loadStart;
+    const corpusLoadMs = elapsed(loadStart);
 
     // Merge retrieval units; prefix chunk ids when multi-corpus to avoid collisions
-    const mergeStart = Date.now();
+    const mergeStart = nowMs();
     const multi = corpusIds.length > 1;
     const chunks = multi
       ? chunkLists.flatMap((list, i) => {
@@ -117,7 +170,7 @@ export async function POST(
           }));
         })
       : (chunkLists[0] ?? []);
-    const corpusMergeMs = Date.now() - mergeStart;
+    const corpusMergeMs = elapsed(mergeStart);
 
     if (chunks.length === 0) {
       throw new Error(
@@ -164,8 +217,9 @@ export async function POST(
         emit,
       );
 
-      // Persist assistant after answer; still await so stream end ≈ durable history
-      await Promise.all([
+      // History is durable side effect, not part of answer latency. Do not
+      // hold the SSE close while Supabase writes the assistant message.
+      after(() => Promise.all([
         userSave,
         persistHistory("save assistant message", () =>
           addNotebookMessage({
@@ -180,7 +234,7 @@ export async function POST(
             status: "completed",
           }),
         ),
-      ]);
+      ]));
     } catch (err) {
       if ((err as Error)?.name === "AbortError") throw err;
       const message = err instanceof Error ? err.message : "Ask failed";

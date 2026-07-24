@@ -247,6 +247,18 @@ export async function retrieveEvidence(
   }
 
   const bm25TopK = Math.max(topK, IR_DEFAULTS.denseTopK, IR_DEFAULTS.maxDenseChunks);
+  // Query embedding and lexical ranking are independent on the pre-indexed
+  // hot path. Start the network request before BM25 so retrieval pays the
+  // larger of the two costs rather than their sum.
+  const allChunksEmbedded = chunks.every(
+    (chunk) => Boolean(chunk.embedding && chunk.embedding.length > 0),
+  );
+  const queryEmbeddingPromise = allChunksEmbedded
+    ? embedTexts([formatQueryForEmbedding(query)], {
+        signal: options?.signal,
+        timeoutMs: 5_000,
+      })
+    : null;
   const bm25Start = performance.now();
   const bm25All = bm25Retrieve(query, chunks, bm25TopK);
   const bm25Ms = Math.round(performance.now() - bm25Start);
@@ -270,8 +282,22 @@ export async function retrieveEvidence(
     let embeddedChunks: ChunkWithEmbedding[] = denseInputChunks;
 
     // Hot path: pre-indexed corpus → embed query only
-    // Cold path: embed query + only missing corpus units (not re-embed all)
+    // Cold path: only opt into live corpus embedding for an explicitly small
+    // missing-vector set. Raw-source notebooks otherwise fall back to BM25
+    // immediately instead of waiting for a provider timeout on every query.
     if (missing.length > 0) {
+      const missingChars = missing.reduce((sum, chunk) => sum + chunk.text.length, 0);
+      if (
+        missing.length > IR_DEFAULTS.maxLiveDenseMissing ||
+        missingChars > IR_DEFAULTS.maxLiveDenseChars
+      ) {
+        return bm25Fallback(
+          query,
+          chunks,
+          topK,
+          `Dense retrieval skipped: ${missing.length} units / ${missingChars} chars are not pre-indexed`,
+        );
+      }
       const response = await embedTexts(
         [formatQueryForEmbedding(query), ...missing.map((chunk) => chunk.text)],
         { signal: options?.signal, timeoutMs: 5_000 },
@@ -309,10 +335,10 @@ export async function retrieveEvidence(
       });
     }
 
-    const response = await embedTexts(
+    const response = await (queryEmbeddingPromise || embedTexts(
       [formatQueryForEmbedding(query)],
       { signal: options?.signal, timeoutMs: 5_000 },
-    );
+    ));
     embeddingProvider = response.provider;
     embeddingModel = response.model;
     return fuseRuns({
@@ -382,8 +408,9 @@ async function legacyRrfCeRetrieve(
     Math.max(topK, IR_DEFAULTS.denseTopK, IR_DEFAULTS.maxDenseChunks),
   );
   const bm25Ms = Math.round(performance.now() - bm25Start);
+  const bm25Ids = new Set(bm25.map((hit) => hit.chunkId));
   const denseInput = chunks.length > IR_DEFAULTS.maxDenseChunks
-    ? chunks.filter((chunk) => bm25.some((hit) => hit.chunkId === chunk.chunkId))
+    ? chunks.filter((chunk) => bm25Ids.has(chunk.chunkId))
     : chunks;
   const byId = new Map(denseInput.map((chunk) => [chunk.chunkId, chunk]));
 

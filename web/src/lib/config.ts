@@ -337,6 +337,17 @@ export const IR_DEFAULTS = {
   denseTopK: 40,
   /** Keep enough candidates for semantic recall on medium-sized raw corpora. */
   maxDenseChunks: envPositiveInt("MAX_DENSE_CHUNKS", 512),
+  /**
+   * Raw sources do not have persisted vectors. Avoid sending an entire raw
+   * corpus to the embedding provider during every query; indexed uploads use
+   * the normal query-only dense path. Set >0 only when live corpus embedding
+   * is explicitly desired for small legacy corpora.
+   */
+  maxLiveDenseMissing: envPositiveInt("MAX_LIVE_DENSE_MISSING", 8),
+  /** Prevent full-PDF text from being sent to the embedding provider live. */
+  maxLiveDenseChars: envPositiveInt("MAX_LIVE_DENSE_CHARS", 12_000),
+  /** Concurrent embedding batches during upload indexing. Keep low for provider safety. */
+  indexEmbeddingConcurrency: envPositiveInt("INDEX_EMBED_CONCURRENCY", 2),
   rrfK: 60,
   adaptiveRrfScale: 1.0,
   adaptiveRrfMinBm25Weight: 0.05,

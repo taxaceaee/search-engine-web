@@ -84,6 +84,7 @@ describe("retrieveEvidence", () => {
     const result = await retrieveEvidence("quantum", chunks, 1, "adaptive_rrf");
     expect(result.diagnostics.mode).toBe("bm25_fallback");
     expect(result.results[0].chunkId).toBe("1");
+    expect(result.results[0].finalScore).toBe(result.results[0].bm25Score);
   });
 
   it("fuses BM25 and dense ranks with adaptive RRF", async () => {

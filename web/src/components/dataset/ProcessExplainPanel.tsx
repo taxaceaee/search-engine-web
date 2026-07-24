@@ -63,7 +63,8 @@ export function ProcessExplainPanel({
   );
   const isRrfMode =
     metrics?.retrievalMode === "adaptive_rrf" ||
-    metrics?.retrievalMode === "legacy_rrf_ce";
+    metrics?.retrievalMode === "legacy_rrf_ce" ||
+    metrics?.retrievalMode === "sgaf";
   const candidates = useMemo(
     () => buildCandidateCompare(rankedChunks, packedChunks, 15),
     [rankedChunks, packedChunks],

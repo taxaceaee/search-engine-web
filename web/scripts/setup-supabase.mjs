@@ -63,12 +63,18 @@ if (!supabaseUrl || !secretKey) {
       connect_timeout: 15,
     });
     try {
-      const migration = await fs.readFile(
-        path.resolve(process.cwd(), "drizzle/0006_notebook_uploads.sql"),
-        "utf8",
-      );
-      await sql.unsafe(migration);
-      console.log("Migration ready: notebook_uploads");
+      for (const name of [
+        "0006_notebook_uploads.sql",
+        "0007_source_char_count.sql",
+        "0008_chunk_search_vector.sql",
+      ]) {
+        const migration = await fs.readFile(
+          path.resolve(process.cwd(), "drizzle", name),
+          "utf8",
+        );
+        await sql.unsafe(migration);
+        console.log(`Migration ready: ${name}`);
+      }
     } finally {
       await sql.end({ timeout: 5 });
     }

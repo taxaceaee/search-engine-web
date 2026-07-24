@@ -1,6 +1,7 @@
 "use client";
 
 import type { Metrics, Timing } from "@/lib/ir/types";
+import { corpusTimingMs } from "@/lib/ir/timing";
 
 function fmtMs(ms?: number | null) {
   if (ms == null || !Number.isFinite(ms)) return "0ms";
@@ -41,11 +42,12 @@ export function RunMetricsStrip({
 }) {
   const latency: { label: string; value: string; hint?: string }[] = [
     { label: "Total", value: fmtMs(timing?.totalMs), hint: "End-to-end wall time" },
+    { label: "Sources", value: fmtMs(corpusTimingMs(timing)), hint: "Notebook lookup + corpus load + merge" },
     { label: "Query", value: fmtMs(timing?.queryProcessMs) },
     {
       label: "Rank",
       value: fmtMs(timing?.rankMs ?? timing?.retrieveMs),
-      hint: "BM25 + dense + fusion",
+      hint: "Wall time for retrieval/ranking; BM25, embedding and fusion may overlap",
     },
     { label: "BM25", value: fmtMs(timing?.bm25Ms) },
     {
@@ -60,6 +62,11 @@ export function RunMetricsStrip({
     label: "TTFT",
     value: fmtMs(timing?.ttftMs),
     hint: "Time to first token",
+  });
+  latency.push({
+    label: "Other",
+    value: fmtMs(timing?.overheadMs),
+    hint: "Measured wall time not assigned to a named top-level stage",
   });
 
   const topStrength = pct(

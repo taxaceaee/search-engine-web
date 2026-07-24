@@ -1,7 +1,7 @@
 "use client";
 
 import { ChevronRight, FileText } from "lucide-react";
-import type { RankedDocument } from "@/lib/ir/types";
+import type { Metrics, RankedDocument } from "@/lib/ir/types";
 import { cn } from "@/lib/utils";
 
 function relativePct(doc: { relativeScore?: number; confidence?: number }) {
@@ -11,10 +11,12 @@ function relativePct(doc: { relativeScore?: number; confidence?: number }) {
 
 export function DocumentResultsList({
   documents,
+  retrievalMode,
   activeId,
   onSelect,
 }: {
   documents: RankedDocument[];
+  retrievalMode?: Metrics["retrievalMode"];
   activeId?: string | null;
   onSelect: (doc: RankedDocument) => void;
 }) {
@@ -25,11 +27,15 @@ export function DocumentResultsList({
           No ranked documents yet
         </p>
         <p className="mt-1 text-xs leading-relaxed text-[var(--fg-subtle)]">
-          Run a query — top matches appear here with RRF score and relative strength.
+          Run a query — top matches appear here with model score and relative strength.
         </p>
       </div>
     );
   }
+
+  const isHybrid =
+    retrievalMode !== "bm25" && retrievalMode !== "bm25_fallback";
+  const finalLabel = isHybrid ? "RRF" : "BM25";
 
   return (
     <ol className="space-y-2">
@@ -116,20 +122,24 @@ export function DocumentResultsList({
                 {/* Score grid — different units on purpose (standard IR channels) */}
                 <span className="mt-2.5 grid grid-cols-2 gap-1.5 sm:grid-cols-4">
                   <MetricCell
-                    label="RRF"
-                    value={formatMetric(doc.finalScore, 4)}
+                    label={finalLabel}
+                    value={formatMetric(doc.finalScore, isHybrid ? 4 : 2)}
                     emphasis
-                    title="Reciprocal Rank Fusion rank-fusion score (k=60), typically ~0–0.033. Not comparable to BM25 raw."
+                    title={
+                      isHybrid
+                        ? "Reciprocal Rank Fusion score (k=60), typically ~0–0.033. Not comparable to BM25 raw."
+                        : "BM25 fallback score. Dense retrieval was not used for this run."
+                    }
                   />
                   <MetricCell
                     label="BM25"
                     value={formatMetric(doc.bm25Best, 2)}
-                    title="Okapi BM25 raw score (typically 0–15+). Not the same unit as RRF or dense. Missing values are shown as 0."
+                    title="Okapi BM25 raw score (typically 0–15+). Not the same unit as RRF or dense. An em dash means this document had no lexical hit."
                   />
                   <MetricCell
                     label="Dense"
                     value={formatMetric(doc.denseBest, 2)}
-                    title="Cosine similarity in [0, 1]. Not the same unit as BM25 or RRF. Missing values are shown as 0."
+                    title="Cosine similarity. Not the same unit as BM25 or RRF. An em dash means dense retrieval was not used or this document had no dense hit."
                   />
                   <MetricCell
                     label="Hits"
@@ -158,7 +168,7 @@ export function DocumentResultsList({
 function formatMetric(value: number | null | undefined, digits: number) {
   return typeof value === "number" && Number.isFinite(value)
     ? value.toFixed(digits)
-    : (0).toFixed(digits);
+    : "—";
 }
 
 function MetricCell({

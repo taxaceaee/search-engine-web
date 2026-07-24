@@ -25,6 +25,7 @@ export type ChatMessage = {
   streaming?: boolean;
   evaluationStatus?: "idle" | "evaluating" | "completed" | "declined";
   evaluationMs?: number;
+  evaluationError?: string;
 };
 
 export type SessionSummary = {
@@ -198,11 +199,13 @@ export function useSearchChat(sessionId: string | null) {
     const chunk = tokenBuf.current;
     tokenBuf.current = "";
     const aid = streamAssistantId.current;
-    setMessages((prev) =>
-      prev.map((m) =>
-        m.id === aid ? { ...m, content: m.content + chunk } : m,
-      ),
-    );
+    setMessages((prev) => {
+      const index = prev.findIndex((m) => m.id === aid);
+      if (index < 0) return prev;
+      const next = prev.slice();
+      next[index] = { ...next[index], content: next[index].content + chunk };
+      return next;
+    });
   }, []);
 
   const scheduleFlush = useCallback(() => {

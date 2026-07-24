@@ -14,6 +14,7 @@ import {
   Database,
 } from "lucide-react";
 import type { Metrics, RankedChunk, Timing } from "@/lib/ir/types";
+import { corpusTimingMs } from "@/lib/ir/timing";
 import { cn } from "@/lib/utils";
 import { EvidenceList } from "@/components/EvidenceList";
 
@@ -267,11 +268,7 @@ function stepMs(
   if (!timing) return null;
   switch (id) {
     case "corpus":
-      return (
-        (timing.notebookLookupMs ?? 0) +
-        (timing.corpusLoadMs ?? 0) +
-        (timing.corpusMergeMs ?? 0)
-      );
+      return corpusTimingMs(timing);
     case "search":
       return timing.searchMs ?? null;
     case "fetch":
@@ -279,7 +276,7 @@ function stepMs(
     case "chunk":
       return timing.chunkMs ?? null;
     case "retrieve":
-      return timing.retrieveMs ?? null;
+      return timing.rankMs ?? timing.retrieveMs ?? null;
     case "embedding":
       return timing.embeddingMs ?? null;
     case "fusion":
@@ -537,6 +534,8 @@ function MetricsStrip({
 
   const parts: string[] = [];
   if (timing?.totalMs != null) parts.push(`Total ${fmtMs(timing.totalMs)}`);
+  if (timing && corpusTimingMs(timing) > 0)
+    parts.push(`Sources ${fmtMs(corpusTimingMs(timing))}`);
   if (timing?.queryProcessMs != null)
     parts.push(`Query ${fmtMs(timing.queryProcessMs)}`);
   if (timing?.rankMs != null) parts.push(`Rank ${fmtMs(timing.rankMs)}`);
@@ -548,6 +547,8 @@ function MetricsStrip({
   if (timing?.packMs != null) parts.push(`Pack ${fmtMs(timing.packMs)}`);
   if (timing?.generateMs != null)
     parts.push(`Gen ${fmtMs(timing.generateMs)}`);
+  if (timing?.overheadMs != null && timing.overheadMs > 0)
+    parts.push(`Other ${fmtMs(timing.overheadMs)}`);
   if (metrics?.retrievalMode)
     parts.push(modeLabel(metrics.retrievalMode));
   {

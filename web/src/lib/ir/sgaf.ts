@@ -356,22 +356,27 @@ function fuseDense(
       (scores.get(d.chunk.chunkId) || 0) + 1 / (k + d.rank),
     );
 
-  return bm25
-    .map((h) => {
-      const d = denseById.get(h.chunkId);
+  const bm25ById = new Map(bm25.map((h) => [h.chunkId, h]));
+  const candidateById = new Map(candidates.map((c) => [c.chunkId, c]));
+  return [...scores.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, topK)
+    .map(([chunkId, finalScore], index) => {
+      const lexical = bm25ById.get(chunkId);
+      const semantic = denseById.get(chunkId);
+      const chunk = candidateById.get(chunkId);
+      if (!chunk) return null;
       return {
-        ...h,
-        ...d?.chunk,
-        bm25Score: h.bm25Score,
-        bm25Rank: h.bm25Rank,
-        denseScore: d?.score,
-        denseRank: d?.rank,
-        finalScore: scores.get(h.chunkId) ?? 0,
-        finalRank: 0,
-        citationId: 0,
+        ...chunk,
+        bm25Score: lexical?.bm25Score ?? 0,
+        bm25Rank: lexical?.bm25Rank ?? 0,
+        denseScore: semantic?.score,
+        denseRank: semantic?.rank,
+        finalScore,
+        finalRank: index + 1,
+        citationId: index + 1,
         bm25Weight,
       } as RankedChunk;
     })
-    .sort((a, b) => (b.finalScore ?? 0) - (a.finalScore ?? 0))
-    .slice(0, topK);
+    .filter((result): result is RankedChunk => Boolean(result));
 }

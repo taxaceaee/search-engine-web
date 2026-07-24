@@ -11,6 +11,8 @@ CREATE TABLE IF NOT EXISTS sources (
   title text NOT NULL,
   mime text,
   text text NOT NULL,
+  char_count integer,
+  search_vector tsvector,
   blob_url text,
   created_at timestamptz NOT NULL DEFAULT now()
 );
@@ -23,7 +25,8 @@ CREATE TABLE IF NOT EXISTS chunks (
   text text NOT NULL,
   token_est integer,
   embedding_json jsonb,
-  embedding_model text
+  embedding_model text,
+  search_vector tsvector
 );
 
 CREATE TABLE IF NOT EXISTS search_runs (
